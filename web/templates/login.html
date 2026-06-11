@@ -1,0 +1,11 @@
+<!doctype html><html lang="uk"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Вхід · LoFi Studio</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260611-2') }}"></head>
+<body class="auth"><form class="card auth-card" method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<h1>LoFi Studio</h1><p class="muted">Панель керування трансляцією</p>
+{% for message in get_flashed_messages() %}<p class="error">{{ message }}</p>{% endfor %}
+<label>Електронна пошта</label><input type="email" name="email" required autocomplete="username">
+<label>Пароль</label><input type="password" name="password" required autocomplete="current-password">
+<button>Увійти</button><a href="/forgot-password">Відновити доступ</a>
+</form></body></html>

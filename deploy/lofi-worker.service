@@ -1,0 +1,20 @@
+[Unit]
+Description=LoFi Studio FFmpeg worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=lofi
+Group=lofi
+WorkingDirectory=/home/lofi/app
+EnvironmentFile=/home/lofi/app/.env
+ExecStart=/home/lofi/app/.venv/bin/python /home/lofi/app/worker.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/lofi/app/data
+
+[Install]
+WantedBy=multi-user.target

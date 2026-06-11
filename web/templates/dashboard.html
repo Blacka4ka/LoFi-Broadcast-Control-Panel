@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LoFi Studio</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260611-2') }}">
+</head>
+<body>
+<header>
+  <a class="brand" href="#overview">
+    <span class="brand-mark">L</span>
+    <span><strong>LoFi Studio</strong><small>stream control room</small></span>
+  </a>
+  <form method="post" action="/logout">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="quiet logout">Вийти</button>
+  </form>
+</header>
+<div class="app-shell">
+<aside>
+  <nav>
+    <a href="#overview" class="active"><span>01</span> Ефір</a>
+    <a href="#media"><span>02</span> Медіа</a>
+    <a href="#playlist"><span>03</span> Плейлист</a>
+    <a href="#visuals"><span>04</span> Оформлення</a>
+    <a href="#integrations"><span>05</span> Інтеграції</a>
+  </nav>
+  <div class="aside-note"><span class="pulse"></span> Система онлайн</div>
+</aside>
+<main>
+  <section id="overview" class="hero card">
+    <div class="hero-copy">
+      <p class="eyebrow">Поточний стан трансляції</p>
+      <div class="stream-title">
+        <span id="stream-dot" class="dot"></span>
+        <h1 id="stream-state">Завантаження...</h1>
+      </div>
+      <p id="stream-message" class="muted">Перевіряємо зв'язок із worker...</p>
+    </div>
+    <div class="actions">
+      <button onclick="streamAction('start')"><span class="button-icon">▶</span> Запустити</button>
+      <button class="secondary" onclick="streamAction('restart')">Перезапустити</button>
+      <button class="danger" onclick="streamAction('stop')">Зупинити</button>
+    </div>
+  </section>
+
+  <section class="metrics">
+    <article class="card"><div class="metric-icon cpu">C</div><div><label>CPU</label><strong id="cpu">–</strong></div></article>
+    <article class="card"><div class="metric-icon memory">M</div><div><label>Пам'ять</label><strong id="memory">–</strong></div></article>
+    <article class="card"><div class="metric-icon disk">D</div><div><label>Диск</label><strong id="disk">–</strong></div></article>
+    <article class="card"><div class="metric-icon uptime">U</div><div><label>Аптайм</label><strong id="uptime">–</strong></div></article>
+  </section>
+
+  <div id="media" class="section-heading">
+    <div><p class="eyebrow">Джерела контенту</p><h2>Трансляція та медіа</h2></div>
+    <p>Налаштуйте вихідний потік і додайте матеріали для ефіру.</p>
+  </div>
+  <div class="grid">
+    <section class="card">
+      <div class="card-heading"><span class="section-icon">↗</span><div><h3>Трансляція</h3><p>Канал і якість вихідного потоку</p></div></div>
+      <label>RTMP / RTMPS адреса</label>
+      <input id="rtmp-url" type="password" placeholder="rtmps://.../stream-key">
+      <label>Бітрейт відео</label>
+      <select id="bitrate">
+        <option>2500k</option><option>3000k</option><option>4500k</option><option>6000k</option>
+      </select>
+      <button onclick="saveSettings()">Зберегти налаштування</button>
+      <p class="hint">Ключ стріму прихований у полі та ніколи не показується у відкритій сторінці.</p>
+    </section>
+
+    <section class="card">
+      <div class="card-heading"><span class="section-icon">＋</span><div><h3>Медіатека</h3><p>Музика, відеофони та зовнішні джерела</p></div></div>
+      <label>Музика</label>
+      <input id="music-file" type="file" accept="audio/*">
+      <button onclick="upload('music')">Завантажити трек</button>
+      <label>Відеофон</label>
+      <input id="video-file" type="file" accept="video/*">
+      <button onclick="upload('video')">Завантажити відео</button>
+      <hr>
+      <label>RTSP / HTTP джерело</label>
+      <input id="remote-name" placeholder="Камера або зовнішній потік">
+      <input id="remote-source" placeholder="rtsp://...">
+      <button class="secondary" onclick="addRemote()">Додати джерело</button>
+    </section>
+  </div>
+
+  <div id="playlist" class="section-heading">
+    <div><p class="eyebrow">Програмування ефіру</p><h2>Плейлист і розклад</h2></div>
+    <p>Оберіть треки та автоматично змінюйте атмосферу протягом доби.</p>
+  </div>
+  <div class="grid">
+    <section class="card">
+      <div class="title-row">
+        <div class="card-heading"><span class="section-icon">♫</span><div><h3>Плейлист</h3><p>Активні треки й порядок відтворення</p></div></div>
+        <div class="title-actions">
+          <label class="shuffle-toggle">
+            <input id="playlist-shuffle" type="checkbox" onchange="savePlaylistSettings()">
+            <span>Shuffle</span>
+          </label>
+          <button onclick="scanMedia()">Сканувати папки</button>
+          <button class="secondary" onclick="saveTracks()">Зберегти вибір</button>
+        </div>
+      </div>
+      <div id="tracks" class="list empty">Треків ще немає</div>
+    </section>
+    <section class="card">
+      <div class="card-heading"><span class="section-icon">◷</span><div><h3>Розклад відео</h3><p>Денні та нічні сцени за часом</p></div></div>
+      <input id="schedule-name" placeholder="Наприклад: Нічний вайб">
+      <select id="schedule-video"></select>
+      <div class="time-row">
+        <input id="start-time" type="time" value="20:00">
+        <span>до</span>
+        <input id="end-time" type="time" value="08:00">
+      </div>
+      <input id="timezone" value="Europe/Kyiv" placeholder="Europe/Kyiv">
+      <button onclick="addSchedule()">Додати правило</button>
+      <div id="schedules" class="list"></div>
+      <p class="hint">Проміжок через північ, наприклад 20:00–08:00, підтримується.</p>
+    </section>
+  </div>
+
+  <div id="visuals" class="section-heading">
+    <div><p class="eyebrow">Візуальні шари</p><h2>Оформлення ефіру</h2></div>
+    <p>Додайте інформацію, погоду та анімовані заклики поверх відео.</p>
+  </div>
+  <div class="grid">
+    <section class="card">
+      <div class="card-heading"><span class="section-icon">T</span><div><h3>Текст поверх відео</h3><p>Дата, погода, локація або власний напис</p></div></div>
+      <label>Назва шару</label>
+      <input id="overlay-name" placeholder="Наприклад: Погода Київ">
+      <label>Тип</label>
+      <select id="overlay-kind">
+        <option value="text">Довільний текст</option>
+        <option value="datetime">Дата й час</option>
+        <option value="location">Локація</option>
+        <option value="weather">Погода локації</option>
+      </select>
+      <label>Текст, локація або формат дати</label>
+      <input id="overlay-content" placeholder="Київ або %d.%m.%Y %H:%M">
+      <div class="form-row">
+        <div><label>Позиція</label><select id="overlay-position"></select></div>
+        <div><label>Розмір</label><input id="overlay-size" type="number" value="36" min="12" max="120"></div>
+        <div><label>Колір</label><input id="overlay-color" type="color" value="#ffffff"></div>
+      </div>
+      <div class="form-row">
+        <div><label>Відступ X</label><input id="overlay-x" type="number" value="30"></div>
+        <div><label>Відступ Y</label><input id="overlay-y" type="number" value="30"></div>
+        <div><label>Часовий пояс</label><input id="overlay-timezone" value="Europe/Kyiv"></div>
+      </div>
+      <button onclick="addTextOverlay()">Додати текстовий шар</button>
+      <div id="text-overlays" class="list"></div>
+      <p class="hint">Для дати можна використовувати формат <code>%d.%m.%Y %H:%M</code>. Для погоди введіть назву міста.</p>
+    </section>
+
+    <section class="card">
+      <div class="card-heading"><span class="section-icon">◈</span><div><h3>Анімація поверх відео</h3><p>Логотип, підписка або прозорий motion-шар</p></div></div>
+      <input id="overlay-file" type="file" accept=".webm,.mov,.mp4,.gif">
+      <button onclick="upload('overlay')">Завантажити анімацію</button>
+      <p class="hint">Для прозорого фону використовуйте WebM з alpha-каналом або MOV ProRes 4444.</p>
+      <div id="media-overlays" class="list"></div>
+    </section>
+  </div>
+
+  <div id="integrations" class="section-heading">
+    <div><p class="eyebrow">Віддалене керування</p><h2>Інтеграції</h2></div>
+    <p>Контролюйте трансляцію з телефону, не відкриваючи панель.</p>
+  </div>
+  <section class="card telegram-card">
+    <div class="card-heading"><span class="section-icon telegram">✦</span><div><h3>Telegram-бот</h3><p>Статус, запуск, зупинка та перезапуск стріму</p></div></div>
+    <div class="grid compact">
+      <div>
+        <label>Bot token</label>
+        <input id="telegram-token" type="password" placeholder="Токен ще не налаштовано">
+      </div>
+      <div>
+        <label>Дозволений Telegram user ID</label>
+        <input id="telegram-user" inputmode="numeric" placeholder="123456789">
+      </div>
+    </div>
+    <label class="toggle"><input id="telegram-enabled" type="checkbox"> Увімкнути керування ботом</label>
+    <button onclick="saveTelegram()">Зберегти Telegram</button>
+    <p class="hint">Секрети не повертаються у браузер. Бот приймає команди лише від вказаного user ID.</p>
+  </section>
+</main>
+</div>
+<div id="toast"></div>
+<script>
+const csrf = {{ csrf_token()|tojson }};
+let state = {};
+const positions = {
+  "top-left":"Зліва вгорі", "top-center":"По центру вгорі",
+  "top-right":"Справа вгорі", "center":"По центру",
+  "bottom-left":"Зліва внизу", "bottom-center":"По центру внизу",
+  "bottom-right":"Справа внизу"
+};
+document.getElementById("overlay-position").innerHTML = Object.entries(positions)
+  .map(([value,label]) => `<option value="${value}">${label}</option>`).join("");
+const sectionObserver = new IntersectionObserver(entries => {
+  const visible = entries
+    .filter(entry => entry.isIntersecting)
+    .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+  if (!visible) return;
+  document.querySelectorAll("aside nav a").forEach(link =>
+    link.classList.toggle("active", link.getAttribute("href") === `#${visible.target.id}`));
+}, {rootMargin:"-18% 0px -65% 0px", threshold:[0, .2, .6]});
+document.querySelectorAll("#overview, #media, #playlist, #visuals, #integrations")
+  .forEach(section => sectionObserver.observe(section));
+async function api(url, options={}) {
+  options.headers = {...(options.headers || {}), "X-CSRF-Token": csrf};
+  if (options.body && typeof options.body !== "string" && !(options.body instanceof FormData)) {
+    options.headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(options.body);
+  }
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Помилка запиту");
+  return data;
+}
+function toast(message) {
+  const box = document.getElementById("toast");
+  box.textContent = message; box.className = "show";
+  setTimeout(() => box.className = "", 2500);
+}
+function duration(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const days = Math.floor(hours / 24);
+  return days ? `${days} д ${hours % 24} год` : `${hours} год`;
+}
+async function refresh() {
+  try {
+    state = await api("/api/state");
+    const stream = state.stream;
+    document.getElementById("stream-state").textContent = {
+      running:"Стрім працює", stopped:"Стрім зупинено",
+      error:"Потрібна увага", offline:"Worker офлайн"
+    }[stream.state] || stream.state;
+    document.getElementById("stream-message").textContent =
+      stream.message || (stream.video ? `Відео: ${stream.video}` : "");
+    document.getElementById("stream-dot").className = `dot ${stream.state}`;
+    ["cpu","memory","disk"].forEach(k =>
+      document.getElementById(k).textContent = `${state.server[k]}%`);
+    document.getElementById("uptime").textContent = duration(state.server.uptime);
+    const rtmp = document.getElementById("rtmp-url");
+    rtmp.placeholder = state.settings.rtmp_configured ?
+      "Адресу налаштовано · введіть нову лише для заміни" : "rtmps://.../stream-key";
+    document.getElementById("bitrate").value = state.settings.video_bitrate;
+    document.getElementById("playlist-shuffle").checked = state.settings.playlist_shuffle;
+    document.getElementById("telegram-enabled").checked = state.settings.telegram_enabled;
+    document.getElementById("telegram-token").placeholder = state.settings.telegram_configured ?
+      "Токен налаштовано · введіть лише для заміни" : "123456:ABC...";
+    document.getElementById("telegram-user").placeholder = state.settings.telegram_user_configured ?
+      "User ID налаштовано · введіть лише для заміни" : "123456789";
+    renderTracks(); renderVideos(); renderSchedules(); renderOverlays();
+  } catch (error) { toast(error.message); }
+}
+function renderTracks() {
+  const root = document.getElementById("tracks");
+  root.innerHTML = state.tracks.map(track => `
+    <label class="row"><input type="checkbox" data-track="${track.id}" ${track.enabled ? "checked":""}>
+    <span>${escapeHtml(track.filename)}</span></label>`).join("") || "Треків ще немає";
+}
+function renderVideos() {
+  document.getElementById("schedule-video").innerHTML = state.videos.map(video =>
+    `<option value="${video.id}">${escapeHtml(video.name)} · ${video.source_type}</option>`).join("");
+}
+function renderSchedules() {
+  document.getElementById("schedules").innerHTML = state.schedules.map(item => `
+    <div class="row"><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.video_name)}
+    · ${item.start_time}–${item.end_time}</small></span>
+    <button class="icon danger" onclick="deleteSchedule(${item.id})">×</button></div>`).join("");
+}
+function renderOverlays() {
+  document.getElementById("text-overlays").innerHTML = state.text_overlays.map(item => `
+    <div class="row"><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.kind)}
+    · ${escapeHtml(positions[item.position] || item.position)}</small></span>
+    <button class="icon danger" onclick="deleteTextOverlay(${item.id})">×</button></div>`).join("");
+  document.getElementById("media-overlays").innerHTML = state.media_overlays.map(item => `
+    <div class="overlay-editor" data-media="${item.id}">
+      <div class="row"><b>${escapeHtml(item.name)}</b>
+      <button class="icon danger" onclick="deleteMediaOverlay(${item.id})">×</button></div>
+      <select data-field="position">${Object.entries(positions).map(([value,label]) =>
+        `<option value="${value}" ${value === item.position ? "selected":""}>${label}</option>`).join("")}</select>
+      <div class="form-row">
+        <input data-field="width" type="number" value="${item.width}" title="Ширина">
+        <input data-field="offset_x" type="number" value="${item.offset_x}" title="Відступ X">
+        <input data-field="offset_y" type="number" value="${item.offset_y}" title="Відступ Y">
+      </div>
+      <label class="toggle"><input data-field="enabled" type="checkbox" ${item.enabled ? "checked":""}> Увімкнено</label>
+      <button class="secondary" onclick="saveMediaOverlay(${item.id})">Застосувати</button>
+    </div>`).join("");
+}
+function escapeHtml(value) {
+  const div = document.createElement("div"); div.textContent = value; return div.innerHTML;
+}
+async function streamAction(action) {
+  await api(`/api/stream/${action}`, {method:"POST"}); toast("Команду прийнято"); refresh();
+}
+async function saveSettings() {
+  await api("/api/settings", {method:"POST", body:{
+    rtmp_url:document.getElementById("rtmp-url").value,
+    video_bitrate:document.getElementById("bitrate").value
+  }}); toast("Налаштування збережено");
+}
+async function upload(kind) {
+  const input = document.getElementById(`${kind}-file`);
+  if (!input.files[0]) return toast("Оберіть файл");
+  const body = new FormData(); body.append("file", input.files[0]);
+  await api(`/api/upload/${kind}`, {method:"POST", body});
+  toast("Файл завантажено"); input.value = ""; refresh();
+}
+async function addRemote() {
+  await api("/api/videos/remote", {method:"POST", body:{
+    name:document.getElementById("remote-name").value,
+    source:document.getElementById("remote-source").value
+  }}); toast("Джерело додано"); refresh();
+}
+async function saveTracks() {
+  const tracks = [...document.querySelectorAll("[data-track]")].map(input => ({
+    id:Number(input.dataset.track), enabled:input.checked
+  }));
+  await api("/api/tracks", {method:"POST", body:{tracks}});
+  toast("Плейлист оновлено");
+}
+async function scanMedia() {
+  const result = await api("/api/media/scan", {method:"POST"});
+  toast(`Додано треків: ${result.tracks}, відео: ${result.videos}`);
+  await refresh();
+}
+async function savePlaylistSettings() {
+  const shuffle = document.getElementById("playlist-shuffle").checked;
+  await api("/api/playlist/settings", {method:"POST", body:{shuffle}});
+  toast(shuffle ? "Shuffle увімкнено" : "Ручний порядок увімкнено");
+}
+async function addSchedule() {
+  await api("/api/schedules", {method:"POST", body:{
+    name:document.getElementById("schedule-name").value,
+    video_id:document.getElementById("schedule-video").value,
+    start_time:document.getElementById("start-time").value,
+    end_time:document.getElementById("end-time").value,
+    timezone:document.getElementById("timezone").value
+  }}); toast("Розклад додано"); refresh();
+}
+async function deleteSchedule(id) {
+  await api(`/api/schedules/${id}`, {method:"DELETE"}); refresh();
+}
+async function addTextOverlay() {
+  await api("/api/text-overlays", {method:"POST", body:{
+    name:document.getElementById("overlay-name").value || "Текст",
+    kind:document.getElementById("overlay-kind").value,
+    content:document.getElementById("overlay-content").value,
+    position:document.getElementById("overlay-position").value,
+    font_size:document.getElementById("overlay-size").value,
+    font_color:document.getElementById("overlay-color").value,
+    offset_x:document.getElementById("overlay-x").value,
+    offset_y:document.getElementById("overlay-y").value,
+    timezone:document.getElementById("overlay-timezone").value
+  }}); toast("Текстовий шар додано"); refresh();
+}
+async function deleteTextOverlay(id) {
+  await api(`/api/text-overlays/${id}`, {method:"DELETE"}); refresh();
+}
+async function saveMediaOverlay(id) {
+  const root = document.querySelector(`[data-media="${id}"]`);
+  const value = field => root.querySelector(`[data-field="${field}"]`);
+  await api(`/api/media-overlays/${id}`, {method:"POST", body:{
+    position:value("position").value, width:value("width").value,
+    offset_x:value("offset_x").value, offset_y:value("offset_y").value,
+    enabled:value("enabled").checked
+  }}); toast("Анімацію оновлено"); refresh();
+}
+async function deleteMediaOverlay(id) {
+  await api(`/api/media-overlays/${id}`, {method:"DELETE"}); refresh();
+}
+async function saveTelegram() {
+  await api("/api/telegram", {method:"POST", body:{
+    enabled:document.getElementById("telegram-enabled").checked,
+    token:document.getElementById("telegram-token").value,
+    user_id:document.getElementById("telegram-user").value
+  }});
+  document.getElementById("telegram-token").value = "";
+  document.getElementById("telegram-user").value = "";
+  toast("Налаштування Telegram збережено"); refresh();
+}
+refresh(); setInterval(refresh, 5000);
+</script>
+</body>
+</html>

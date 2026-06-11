@@ -1,0 +1,10 @@
+<!doctype html><html lang="uk"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Відновлення · LoFi Studio</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260611-2') }}"></head>
+<body class="auth"><form class="card auth-card" method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<h1>Відновлення доступу</h1>
+{% for message in get_flashed_messages() %}<p>{{ message }}</p>{% endfor %}
+<label>Електронна пошта</label><input type="email" name="email" required>
+<button>Надіслати посилання</button><a href="/login">Повернутися до входу</a>
+</form></body></html>

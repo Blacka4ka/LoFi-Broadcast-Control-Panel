@@ -1,0 +1,19 @@
+[Unit]
+Description=LoFi Studio web panel
+After=network.target
+
+[Service]
+User=lofi
+Group=lofi
+WorkingDirectory=/home/lofi/app/web
+EnvironmentFile=/home/lofi/app/.env
+ExecStart=/home/lofi/app/.venv/bin/gunicorn --workers 2 --bind 127.0.0.1:8000 --access-logfile - app:app
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/lofi/app/data /home/lofi/app/music /home/lofi/app/video /home/lofi/app/overlays
+
+[Install]
+WantedBy=multi-user.target

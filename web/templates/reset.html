@@ -1,0 +1,11 @@
+<!doctype html><html lang="uk"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Новий пароль · LoFi Studio</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260611-2') }}"></head>
+<body class="auth"><form class="card auth-card" method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<h1>Новий пароль</h1>
+{% for message in get_flashed_messages() %}<p class="error">{{ message }}</p>{% endfor %}
+<label>Пароль, мінімум 12 символів</label>
+<input type="password" name="password" minlength="12" required autocomplete="new-password">
+<button>Оновити пароль</button>
+</form></body></html>
