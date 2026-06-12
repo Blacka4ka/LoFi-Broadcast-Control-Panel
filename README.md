@@ -1,5 +1,3 @@
-<img width="1467" height="1139" alt="image" src="https://github.com/user-attachments/assets/836aa6ac-6eef-490b-91e7-70b0f9a7dec3" />
-
 # LoFi Studio: повне розгортання на Ubuntu
 
 Це покрокова інструкція для встановлення LoFi Studio на чистий хмарний
@@ -554,6 +552,90 @@ ffmpeg -version
 
 ```bash
 df -h
+```
+
+### YouTube періодично втрачає потік
+
+Ознаки проблеми в журналі:
+
+```text
+Connection reset by peer
+TLS Error in the pull function
+IO error: End of file
+FFmpeg progress stalled; reconnecting RTMP session
+```
+
+Worker має watchdog і автоматично створює нову RTMPS-сесію, якщо FFmpeg
+перестає передавати кадри. Для короткого відновлення в YouTube Studio
+увімкніть `Auto-start` і вимкніть `Auto-stop`.
+
+Спочатку переконайтеся, що використовується захищена адреса:
+
+```text
+rtmps://a.rtmps.youtube.com/live2/STREAM_KEY
+```
+
+Перевірити без показу ключа:
+
+```bash
+pgrep -af ffmpeg | sed -E 's#(live2/)[^ ]+#\1***#'
+```
+
+Якщо `ss` показує підключення YouTube через IPv6 у квадратних дужках,
+наприклад `[2a00:...]:443`, можна надати IPv4 вищий пріоритет. Це не
+вимикає IPv6 на сервері повністю.
+
+Створіть резервну копію системного правила:
+
+```bash
+sudo cp /etc/gai.conf /etc/gai.conf.backup
+```
+
+Додайте пріоритет IPv4:
+
+```bash
+grep -q '^precedence ::ffff:0:0/96  100' /etc/gai.conf ||
+echo 'precedence ::ffff:0:0/96  100' | sudo tee -a /etc/gai.conf
+```
+
+Перевірте порядок адрес:
+
+```bash
+getent ahosts a.rtmps.youtube.com
+```
+
+Перезапустіть лише worker:
+
+```bash
+sudo systemctl restart lofi-worker
+sleep 5
+sudo ss -tinp | grep ffmpeg
+```
+
+Віддалена адреса YouTube тепер повинна бути IPv4 без квадратних дужок:
+
+```text
+SERVER_IP:PORT  GOOGLE_IPV4:443
+```
+
+Не додавайте параметр `-4` у команду FFmpeg. Деякі Ubuntu-збірки FFmpeg
+не підтримують його і завершуються з помилкою:
+
+```text
+Unrecognized option '4'
+```
+
+Щоб повернути попередній порядок адрес:
+
+```bash
+sudo cp /etc/gai.conf.backup /etc/gai.conf
+sudo systemctl restart lofi-worker
+```
+
+Для спостереження лише за новими подіями:
+
+```bash
+sudo journalctl -u lofi-worker -f -n 0
 ```
 
 ### Відновлення пароля не надсилає лист
