@@ -70,6 +70,7 @@ def init_db():
               offset_y INTEGER NOT NULL DEFAULT 30,
               font_size INTEGER NOT NULL DEFAULT 36,
               font_color TEXT NOT NULL DEFAULT 'white',
+              font_family TEXT NOT NULL DEFAULT 'sans',
               timezone TEXT NOT NULL DEFAULT 'Europe/Kyiv',
               enabled INTEGER NOT NULL DEFAULT 1
             );
@@ -81,10 +82,33 @@ def init_db():
               offset_x INTEGER NOT NULL DEFAULT 30,
               offset_y INTEGER NOT NULL DEFAULT 30,
               width INTEGER NOT NULL DEFAULT 420,
+              interval_minutes INTEGER NOT NULL DEFAULT 0,
+              duration_seconds INTEGER NOT NULL DEFAULT 10,
               enabled INTEGER NOT NULL DEFAULT 1
             );
             """
         )
+        columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(media_overlays)")
+        }
+        if "interval_minutes" not in columns:
+            db.execute(
+                "ALTER TABLE media_overlays "
+                "ADD COLUMN interval_minutes INTEGER NOT NULL DEFAULT 0"
+            )
+        if "duration_seconds" not in columns:
+            db.execute(
+                "ALTER TABLE media_overlays "
+                "ADD COLUMN duration_seconds INTEGER NOT NULL DEFAULT 10"
+            )
+        text_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(text_overlays)")
+        }
+        if "font_family" not in text_columns:
+            db.execute(
+                "ALTER TABLE text_overlays "
+                "ADD COLUMN font_family TEXT NOT NULL DEFAULT 'sans'"
+            )
         defaults = {
             "desired_state": "stopped",
             "rtmp_url": os.getenv("YT_URL", "") + (

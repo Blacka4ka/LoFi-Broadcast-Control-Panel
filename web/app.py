@@ -1,8 +1,10 @@
 import os
+import re
 import secrets
 import smtplib
 import sqlite3
 import time
+import urllib.parse
 from email.message import EmailMessage
 from functools import wraps
 from pathlib import Path
@@ -176,6 +178,12 @@ def dashboard():
 @app.get("/api/state")
 @login_required
 def state():
+    live = {
+        "stream": worker_status(),
+        "server": server_status(),
+    }
+    if request.args.get("live") == "1":
+        return jsonify(live)
     with connect() as db:
         tracks = [dict(row) for row in db.execute(
             "SELECT id, filename, enabled, position FROM tracks ORDER BY position, filename"
@@ -196,8 +204,7 @@ def state():
             "SELECT * FROM media_overlays ORDER BY id"
         )]
     return jsonify({
-        "stream": worker_status(),
-        "server": server_status(),
+        **live,
         "settings": {
             "desired_state": setting("desired_state", "stopped"),
             "rtmp_configured": bool(setting("rtmp_url", "")),
@@ -248,23 +255,49 @@ def stream_action(action):
 @login_required
 def save_settings():
     payload = request.get_json()
-    rtmp_url = payload.get("rtmp_url", "").strip()
-    if rtmp_url.startswith("rtmp://a.rtmp.youtube.com/live2/"):
-        rtmp_url = rtmp_url.replace(
+    raw_rtmp = payload.get("rtmp_url", "").strip()
+    bitrate = payload.get("video_bitrate", "3000k")
+    if bitrate not in {"2500k", "3000k", "4500k", "6000k"}:
+        return jsonify(error="Непідтримуваний бітрейт"), 400
+    try:
+        rtmp_url = normalize_rtmp_url(raw_rtmp)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+
+    values = {}
+    if bitrate != setting("video_bitrate", "3000k"):
+        values["video_bitrate"] = bitrate
+    if rtmp_url and rtmp_url != setting("rtmp_url", ""):
+        values["rtmp_url"] = rtmp_url
+    if values:
+        values["config_nonce"] = secrets.token_hex(8)
+        update_settings(values)
+    return jsonify(ok=True, updated=bool(values), key_updated="rtmp_url" in values)
+
+
+def normalize_rtmp_url(value):
+    if not value:
+        return ""
+    if "://" not in value:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{6,200}", value):
+            raise ValueError("Ключ стріму містить недопустимі символи")
+        return f"rtmps://a.rtmps.youtube.com/live2/{value}"
+    if value.startswith("rtmp://a.rtmp.youtube.com/live2/"):
+        value = value.replace(
             "rtmp://a.rtmp.youtube.com/live2/",
             "rtmps://a.rtmps.youtube.com/live2/",
             1,
         )
-    if rtmp_url and not rtmp_url.startswith(("rtmp://", "rtmps://")):
-        return jsonify(error="RTMP URL має починатися з rtmp:// або rtmps://"), 400
-    values = {
-        "video_bitrate": payload.get("video_bitrate", "3000k"),
-        "config_nonce": secrets.token_hex(8),
-    }
-    if rtmp_url:
-        values["rtmp_url"] = rtmp_url
-    update_settings(values)
-    return jsonify(ok=True)
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme not in {"rtmp", "rtmps"} or not parsed.hostname:
+        raise ValueError("Вкажіть ключ YouTube або повну RTMP / RTMPS адресу")
+    if parsed.username or parsed.password or parsed.fragment:
+        raise ValueError("RTMP-адреса має неправильний формат")
+    if parsed.hostname in {"a.rtmp.youtube.com", "a.rtmps.youtube.com"}:
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) < 2 or parts[0] != "live2" or not parts[1]:
+            raise ValueError("У YouTube RTMP-адресі відсутній ключ стріму")
+    return value
 
 
 @app.post("/api/upload/<kind>")
@@ -458,8 +491,8 @@ def add_text_overlay():
         db.execute(
             """INSERT INTO text_overlays
                (name, kind, content, position, offset_x, offset_y, font_size,
-                font_color, timezone)
-               VALUES(?,?,?,?,?,?,?,?,?)""",
+                font_color, font_family, timezone)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
             (
                 payload.get("name", "Текст").strip()[:80],
                 payload["kind"],
@@ -469,6 +502,9 @@ def add_text_overlay():
                 int(payload.get("offset_y", 30)),
                 max(12, min(120, int(payload.get("font_size", 36)))),
                 payload.get("font_color", "white"),
+                payload.get("font_family", "sans")
+                if payload.get("font_family") in {"sans", "bold", "serif", "mono"}
+                else "sans",
                 payload.get("timezone", "Europe/Kyiv").strip(),
             ),
         )
@@ -491,15 +527,24 @@ def delete_text_overlay(overlay_id):
 @login_required
 def update_media_overlay(overlay_id):
     payload = request.get_json()
+    position = payload.get("position", "bottom-right")
+    if position not in {
+        "top-left", "top-center", "top-right", "center",
+        "bottom-left", "bottom-center", "bottom-right",
+    }:
+        return jsonify(error="Невірна позиція"), 400
     with connect() as db:
         db.execute(
             """UPDATE media_overlays SET position = ?, offset_x = ?, offset_y = ?,
-               width = ?, enabled = ? WHERE id = ?""",
+               width = ?, interval_minutes = ?, duration_seconds = ?,
+               enabled = ? WHERE id = ?""",
             (
-                payload.get("position", "bottom-right"),
+                position,
                 int(payload.get("offset_x", 30)),
                 int(payload.get("offset_y", 30)),
                 max(80, min(1920, int(payload.get("width", 420)))),
+                max(0, min(1440, int(payload.get("interval_minutes", 0)))),
+                max(1, min(300, int(payload.get("duration_seconds", 10)))),
                 bool(payload.get("enabled", True)),
                 overlay_id,
             ),

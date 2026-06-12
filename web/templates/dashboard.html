@@ -59,14 +59,15 @@
   <div class="grid">
     <section class="card">
       <div class="card-heading"><span class="section-icon">↗</span><div><h3>Трансляція</h3><p>Канал і якість вихідного потоку</p></div></div>
-      <label>RTMP / RTMPS адреса</label>
-      <input id="rtmp-url" type="password" placeholder="rtmps://.../stream-key">
+      <label>Ключ стріму або RTMP / RTMPS адреса</label>
+      <input id="rtmp-url" type="password" autocomplete="new-password"
+        placeholder="xxxx-xxxx-xxxx-xxxx або rtmps://...">
       <label>Бітрейт відео</label>
-      <select id="bitrate">
+      <select id="bitrate" data-refresh-key="stream-settings">
         <option>2500k</option><option>3000k</option><option>4500k</option><option>6000k</option>
       </select>
       <button onclick="saveSettings()">Зберегти налаштування</button>
-      <p class="hint">Ключ стріму прихований у полі та ніколи не показується у відкритій сторінці.</p>
+      <p class="hint">Можна вставити лише ключ YouTube. Збережений ключ прихований і ніколи не повертається у браузер.</p>
     </section>
 
     <section class="card">
@@ -95,19 +96,19 @@
         <div class="card-heading"><span class="section-icon">♫</span><div><h3>Плейлист</h3><p>Активні треки й порядок відтворення</p></div></div>
         <div class="title-actions">
           <label class="shuffle-toggle">
-            <input id="playlist-shuffle" type="checkbox" onchange="savePlaylistSettings()">
+            <input id="playlist-shuffle" type="checkbox" data-refresh-key="shuffle" onchange="savePlaylistSettings()">
             <span>Shuffle</span>
           </label>
           <button onclick="scanMedia()">Сканувати папки</button>
           <button class="secondary" onclick="saveTracks()">Зберегти вибір</button>
         </div>
       </div>
-      <div id="tracks" class="list empty">Треків ще немає</div>
+      <div id="tracks" class="list empty" data-refresh-key="tracks">Треків ще немає</div>
     </section>
     <section class="card">
       <div class="card-heading"><span class="section-icon">◷</span><div><h3>Розклад відео</h3><p>Денні та нічні сцени за часом</p></div></div>
       <input id="schedule-name" placeholder="Наприклад: Нічний вайб">
-      <select id="schedule-video"></select>
+      <select id="schedule-video" data-refresh-key="schedule-video"></select>
       <div class="time-row">
         <input id="start-time" type="time" value="20:00">
         <span>до</span>
@@ -143,6 +144,13 @@
         <div><label>Розмір</label><input id="overlay-size" type="number" value="36" min="12" max="120"></div>
         <div><label>Колір</label><input id="overlay-color" type="color" value="#ffffff"></div>
       </div>
+      <label>Шрифт</label>
+      <select id="overlay-font">
+        <option value="sans">Сучасний</option>
+        <option value="bold">Сучасний жирний</option>
+        <option value="serif">Класичний</option>
+        <option value="mono">Моноширинний</option>
+      </select>
       <div class="form-row">
         <div><label>Відступ X</label><input id="overlay-x" type="number" value="30"></div>
         <div><label>Відступ Y</label><input id="overlay-y" type="number" value="30"></div>
@@ -158,7 +166,7 @@
       <input id="overlay-file" type="file" accept=".webm,.mov,.mp4,.gif">
       <button onclick="upload('overlay')">Завантажити анімацію</button>
       <p class="hint">Для прозорого фону використовуйте WebM з alpha-каналом або MOV ProRes 4444.</p>
-      <div id="media-overlays" class="list"></div>
+      <div id="media-overlays" class="list" data-refresh-key="media-overlays"></div>
     </section>
   </div>
 
@@ -178,7 +186,7 @@
         <input id="telegram-user" inputmode="numeric" placeholder="123456789">
       </div>
     </div>
-    <label class="toggle"><input id="telegram-enabled" type="checkbox"> Увімкнути керування ботом</label>
+    <label class="toggle"><input id="telegram-enabled" type="checkbox" data-refresh-key="telegram"> Увімкнути керування ботом</label>
     <button onclick="saveTelegram()">Зберегти Telegram</button>
     <p class="hint">Секрети не повертаються у браузер. Бот приймає команди лише від вказаного user ID.</p>
   </section>
@@ -188,6 +196,10 @@
 <script>
 const csrf = {{ csrf_token()|tojson }};
 let state = {};
+const dirtyRefreshKeys = new Set();
+let refreshInFlight = false;
+let refreshQueued = false;
+let refreshQueuedFull = false;
 const positions = {
   "top-left":"Зліва вгорі", "top-center":"По центру вгорі",
   "top-right":"Справа вгорі", "center":"По центру",
@@ -227,9 +239,16 @@ function duration(seconds) {
   const days = Math.floor(hours / 24);
   return days ? `${days} д ${hours % 24} год` : `${hours} год`;
 }
-async function refresh() {
+async function refresh(full=true) {
+  if (refreshInFlight) {
+    refreshQueued = true;
+    refreshQueuedFull = refreshQueuedFull || full;
+    return;
+  }
+  refreshInFlight = true;
   try {
-    state = await api("/api/state");
+    const update = await api(full ? "/api/state" : "/api/state?live=1");
+    state = full ? update : {...state, ...update};
     const stream = state.stream;
     document.getElementById("stream-state").textContent = {
       running:"Стрім працює", stopped:"Стрім зупинено",
@@ -241,18 +260,35 @@ async function refresh() {
     ["cpu","memory","disk"].forEach(k =>
       document.getElementById(k).textContent = `${state.server[k]}%`);
     document.getElementById("uptime").textContent = duration(state.server.uptime);
-    const rtmp = document.getElementById("rtmp-url");
-    rtmp.placeholder = state.settings.rtmp_configured ?
-      "Адресу налаштовано · введіть нову лише для заміни" : "rtmps://.../stream-key";
-    document.getElementById("bitrate").value = state.settings.video_bitrate;
-    document.getElementById("playlist-shuffle").checked = state.settings.playlist_shuffle;
-    document.getElementById("telegram-enabled").checked = state.settings.telegram_enabled;
-    document.getElementById("telegram-token").placeholder = state.settings.telegram_configured ?
-      "Токен налаштовано · введіть лише для заміни" : "123456:ABC...";
-    document.getElementById("telegram-user").placeholder = state.settings.telegram_user_configured ?
-      "User ID налаштовано · введіть лише для заміни" : "123456789";
-    renderTracks(); renderVideos(); renderSchedules(); renderOverlays();
-  } catch (error) { toast(error.message); }
+    if (full) {
+      const rtmp = document.getElementById("rtmp-url");
+      rtmp.placeholder = state.settings.rtmp_configured ?
+        "Адресу налаштовано · введіть нову лише для заміни" : "rtmps://.../stream-key";
+      if (!dirtyRefreshKeys.has("stream-settings"))
+        document.getElementById("bitrate").value = state.settings.video_bitrate;
+      if (!dirtyRefreshKeys.has("shuffle"))
+        document.getElementById("playlist-shuffle").checked = state.settings.playlist_shuffle;
+      if (!dirtyRefreshKeys.has("telegram"))
+        document.getElementById("telegram-enabled").checked = state.settings.telegram_enabled;
+      document.getElementById("telegram-token").placeholder = state.settings.telegram_configured ?
+        "Токен налаштовано · введіть лише для заміни" : "123456:ABC...";
+      document.getElementById("telegram-user").placeholder = state.settings.telegram_user_configured ?
+        "User ID налаштовано · введіть лише для заміни" : "123456789";
+      if (!dirtyRefreshKeys.has("tracks")) renderTracks();
+      if (!dirtyRefreshKeys.has("schedule-video")) renderVideos();
+      renderSchedules(); renderOverlays();
+    }
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    refreshInFlight = false;
+    if (refreshQueued) {
+      const fullNext = refreshQueuedFull;
+      refreshQueued = false;
+      refreshQueuedFull = false;
+      refresh(fullNext);
+    }
+  }
 }
 function renderTracks() {
   const root = document.getElementById("tracks");
@@ -275,6 +311,7 @@ function renderOverlays() {
     <div class="row"><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.kind)}
     · ${escapeHtml(positions[item.position] || item.position)}</small></span>
     <button class="icon danger" onclick="deleteTextOverlay(${item.id})">×</button></div>`).join("");
+  if (dirtyRefreshKeys.has("media-overlays")) return;
   document.getElementById("media-overlays").innerHTML = state.media_overlays.map(item => `
     <div class="overlay-editor" data-media="${item.id}">
       <div class="row"><b>${escapeHtml(item.name)}</b>
@@ -285,6 +322,21 @@ function renderOverlays() {
         <input data-field="width" type="number" value="${item.width}" title="Ширина">
         <input data-field="offset_x" type="number" value="${item.offset_x}" title="Відступ X">
         <input data-field="offset_y" type="number" value="${item.offset_y}" title="Відступ Y">
+      </div>
+      <div class="form-row schedule-fields">
+        <div><label>Показувати кожні</label>
+          <select data-field="interval_minutes">
+            <option value="0" ${item.interval_minutes === 0 ? "selected":""}>Постійно</option>
+            <option value="30" ${item.interval_minutes === 30 ? "selected":""}>30 хвилин</option>
+            <option value="60" ${item.interval_minutes === 60 ? "selected":""}>1 годину</option>
+            <option value="90" ${item.interval_minutes === 90 ? "selected":""}>1,5 години</option>
+            <option value="120" ${item.interval_minutes === 120 ? "selected":""}>2 години</option>
+          </select>
+        </div>
+        <div><label>Тривалість показу</label>
+          <input data-field="duration_seconds" type="number" min="1" max="300"
+            value="${item.duration_seconds}" title="Секунди">
+        </div>
       </div>
       <label class="toggle"><input data-field="enabled" type="checkbox" ${item.enabled ? "checked":""}> Увімкнено</label>
       <button class="secondary" onclick="saveMediaOverlay(${item.id})">Застосувати</button>
@@ -297,10 +349,15 @@ async function streamAction(action) {
   await api(`/api/stream/${action}`, {method:"POST"}); toast("Команду прийнято"); refresh();
 }
 async function saveSettings() {
-  await api("/api/settings", {method:"POST", body:{
+  const result = await api("/api/settings", {method:"POST", body:{
     rtmp_url:document.getElementById("rtmp-url").value,
     video_bitrate:document.getElementById("bitrate").value
-  }}); toast("Налаштування збережено");
+  }});
+  dirtyRefreshKeys.delete("stream-settings");
+  document.getElementById("rtmp-url").value = "";
+  toast(result.key_updated ? "Новий ключ збережено, потік перепідключається" :
+    result.updated ? "Налаштування збережено" : "Змін немає");
+  await refresh();
 }
 async function upload(kind) {
   const input = document.getElementById(`${kind}-file`);
@@ -320,7 +377,9 @@ async function saveTracks() {
     id:Number(input.dataset.track), enabled:input.checked
   }));
   await api("/api/tracks", {method:"POST", body:{tracks}});
+  dirtyRefreshKeys.delete("tracks");
   toast("Плейлист оновлено");
+  await refresh();
 }
 async function scanMedia() {
   const result = await api("/api/media/scan", {method:"POST"});
@@ -330,7 +389,9 @@ async function scanMedia() {
 async function savePlaylistSettings() {
   const shuffle = document.getElementById("playlist-shuffle").checked;
   await api("/api/playlist/settings", {method:"POST", body:{shuffle}});
+  dirtyRefreshKeys.delete("shuffle");
   toast(shuffle ? "Shuffle увімкнено" : "Ручний порядок увімкнено");
+  await refresh();
 }
 async function addSchedule() {
   await api("/api/schedules", {method:"POST", body:{
@@ -339,7 +400,10 @@ async function addSchedule() {
     start_time:document.getElementById("start-time").value,
     end_time:document.getElementById("end-time").value,
     timezone:document.getElementById("timezone").value
-  }}); toast("Розклад додано"); refresh();
+  }});
+  dirtyRefreshKeys.delete("schedule-video");
+  toast("Розклад додано");
+  await refresh();
 }
 async function deleteSchedule(id) {
   await api(`/api/schedules/${id}`, {method:"DELETE"}); refresh();
@@ -352,6 +416,7 @@ async function addTextOverlay() {
     position:document.getElementById("overlay-position").value,
     font_size:document.getElementById("overlay-size").value,
     font_color:document.getElementById("overlay-color").value,
+    font_family:document.getElementById("overlay-font").value,
     offset_x:document.getElementById("overlay-x").value,
     offset_y:document.getElementById("overlay-y").value,
     timezone:document.getElementById("overlay-timezone").value
@@ -363,14 +428,22 @@ async function deleteTextOverlay(id) {
 async function saveMediaOverlay(id) {
   const root = document.querySelector(`[data-media="${id}"]`);
   const value = field => root.querySelector(`[data-field="${field}"]`);
-  await api(`/api/media-overlays/${id}`, {method:"POST", body:{
+  const body = {
     position:value("position").value, width:value("width").value,
     offset_x:value("offset_x").value, offset_y:value("offset_y").value,
+    interval_minutes:value("interval_minutes").value,
+    duration_seconds:value("duration_seconds").value,
     enabled:value("enabled").checked
-  }}); toast("Анімацію оновлено"); refresh();
+  };
+  await api(`/api/media-overlays/${id}`, {method:"POST", body});
+  dirtyRefreshKeys.delete("media-overlays");
+  toast("Анімацію оновлено");
+  await refresh();
 }
 async function deleteMediaOverlay(id) {
-  await api(`/api/media-overlays/${id}`, {method:"DELETE"}); refresh();
+  await api(`/api/media-overlays/${id}`, {method:"DELETE"});
+  dirtyRefreshKeys.delete("media-overlays");
+  await refresh();
 }
 async function saveTelegram() {
   await api("/api/telegram", {method:"POST", body:{
@@ -380,9 +453,17 @@ async function saveTelegram() {
   }});
   document.getElementById("telegram-token").value = "";
   document.getElementById("telegram-user").value = "";
-  toast("Налаштування Telegram збережено"); refresh();
+  dirtyRefreshKeys.delete("telegram");
+  toast("Налаштування Telegram збережено");
+  await refresh();
 }
-refresh(); setInterval(refresh, 5000);
+function markRefreshFieldDirty(event) {
+  const field = event.target.closest("[data-refresh-key]");
+  if (field) dirtyRefreshKeys.add(field.dataset.refreshKey);
+}
+document.addEventListener("input", markRefreshFieldDirty);
+document.addEventListener("change", markRefreshFieldDirty);
+refresh(); setInterval(() => refresh(false), 5000);
 </script>
 </body>
 </html>
