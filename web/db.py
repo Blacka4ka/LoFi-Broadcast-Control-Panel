@@ -101,6 +101,17 @@ def init_db():
         db.executemany(
             "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", defaults.items()
         )
+        # Migrate legacy YouTube RTMP URLs while preserving the stream key.
+        db.execute(
+            """UPDATE settings
+               SET value = replace(
+                 value,
+                 'rtmp://a.rtmp.youtube.com/live2/',
+                 'rtmps://a.rtmps.youtube.com/live2/'
+               )
+               WHERE key = 'rtmp_url'
+                 AND value LIKE 'rtmp://a.rtmp.youtube.com/live2/%'"""
+        )
         email = os.getenv("ADMIN_EMAIL")
         password = os.getenv("ADMIN_PASSWORD")
         if email and password:

@@ -249,6 +249,12 @@ def stream_action(action):
 def save_settings():
     payload = request.get_json()
     rtmp_url = payload.get("rtmp_url", "").strip()
+    if rtmp_url.startswith("rtmp://a.rtmp.youtube.com/live2/"):
+        rtmp_url = rtmp_url.replace(
+            "rtmp://a.rtmp.youtube.com/live2/",
+            "rtmps://a.rtmps.youtube.com/live2/",
+            1,
+        )
     if rtmp_url and not rtmp_url.startswith(("rtmp://", "rtmps://")):
         return jsonify(error="RTMP URL має починатися з rtmp:// або rtmps://"), 400
     values = {

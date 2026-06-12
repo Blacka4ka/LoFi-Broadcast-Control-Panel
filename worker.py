@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 import re
 import random
+import threading
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -29,6 +30,10 @@ process = None
 active_signature = None
 started_at = None
 weather_cache = {}
+last_progress_at = None
+last_output_time_ms = 0
+WATCHDOG_GRACE_SECONDS = 45
+WATCHDOG_STALL_SECONDS = 30
 
 
 def write_status(state, message="", **extra):
@@ -182,7 +187,9 @@ def position_expression(position, offset_x, offset_y, media=False):
 
 
 def video_filters(text_overlays, media_overlays):
-    filters = ["[0:v]setpts=PTS-STARTPTS[v0]"]
+    # Rebuild timestamps from frame numbers so looping files cannot send
+    # backward/discontinuous PTS values to the RTMP server.
+    filters = ["[0:v]fps=30,settb=AVTB,setpts=N/(30*TB)[v0]"]
     current = "v0"
     for index, overlay in enumerate(media_overlays, start=2):
         scaled = f"media{index}"
@@ -191,7 +198,8 @@ def video_filters(text_overlays, media_overlays):
             overlay["position"], overlay["offset_x"], overlay["offset_y"], media=True
         )
         filters.append(
-            f"[{index}:v]scale={overlay['width']}:-1,setpts=PTS-STARTPTS[{scaled}]"
+            f"[{index}:v]fps=30,scale={overlay['width']}:-1,"
+            f"settb=AVTB,setpts=N/(30*TB)[{scaled}]"
         )
         filters.append(
             f"[{current}][{scaled}]overlay=x='{x}':y='{y}':eof_action=repeat[{output}]"
@@ -229,25 +237,89 @@ def command(video, playlist, text_overlays, media_overlays):
             media_inputs.extend(["-stream_loop", "-1", "-i", str(path)])
             valid_media.append(overlay)
     filters, video_output = video_filters(text_overlays, valid_media)
+    bitrate = setting("video_bitrate", "3000k")
+    try:
+        buffer_size = f"{int(bitrate.removesuffix('k')) * 2}k"
+    except ValueError:
+        buffer_size = "6000k"
+    destination = setting("rtmp_url", "")
+    if destination.startswith("rtmp://a.rtmp.youtube.com/live2/"):
+        destination = destination.replace(
+            "rtmp://a.rtmp.youtube.com/live2/",
+            "rtmps://a.rtmps.youtube.com/live2/",
+            1,
+        )
     return [
-        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning", "-re",
+        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning",
+        "-progress", "pipe:1", "-stats_period", "2", "-re",
         *video_input,
         "-re", "-stream_loop", "-1", "-f", "concat", "-safe", "0", "-i", playlist,
         *media_inputs,
         "-filter_complex", filters,
         "-map", f"[{video_output}]", "-map", "1:a:0",
         "-c:v", "libx264", "-preset", "veryfast",
-        "-b:v", setting("video_bitrate", "3000k"),
-        "-maxrate", setting("video_bitrate", "3000k"), "-bufsize", "6000k",
-        "-pix_fmt", "yuv420p", "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
-        "-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2",
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=async=1:first_pts=0",
-        "-flvflags", "no_duration_filesize", "-f", "flv", setting("rtmp_url", ""),
+        "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", buffer_size,
+        "-pix_fmt", "yuv420p", "-r", "30",
+        "-g", "60", "-keyint_min", "60", "-sc_threshold", "0",
+        "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+        "-af", (
+            "loudnorm=I=-16:TP=-1.5:LRA=11,"
+            "aresample=48000:async=1000:first_pts=0,asetpts=N/SR/TB"
+        ),
+        "-flvflags", "no_duration_filesize", "-f", "flv", destination,
     ]
 
 
+def monitor_progress(stream):
+    global last_progress_at, last_output_time_ms
+    try:
+        for raw_line in stream:
+            key, separator, value = raw_line.strip().partition("=")
+            if not separator:
+                continue
+            if key in {"out_time_ms", "out_time_us"}:
+                try:
+                    output_time = int(value)
+                except ValueError:
+                    continue
+                if output_time > last_output_time_ms:
+                    last_output_time_ms = output_time
+                    last_progress_at = time.monotonic()
+            elif key == "progress" and value == "continue":
+                last_progress_at = time.monotonic()
+    finally:
+        stream.close()
+
+
+def start_stream(command_args):
+    global process, started_at, last_progress_at, last_output_time_ms
+    last_progress_at = time.monotonic()
+    last_output_time_ms = 0
+    process = subprocess.Popen(
+        command_args,
+        stdout=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    threading.Thread(
+        target=monitor_progress,
+        args=(process.stdout,),
+        daemon=True,
+        name="ffmpeg-progress",
+    ).start()
+    started_at = int(time.time())
+
+
+def stream_is_stalled():
+    if not process or process.poll() is not None or last_progress_at is None:
+        return False
+    if not started_at or time.time() - started_at < WATCHDOG_GRACE_SECONDS:
+        return False
+    return time.monotonic() - last_progress_at > WATCHDOG_STALL_SECONDS
+
+
 def stop_stream():
-    global process, started_at
+    global process, started_at, last_progress_at, last_output_time_ms
     if process and process.poll() is None:
         process.send_signal(signal.SIGTERM)
         try:
@@ -256,6 +328,8 @@ def stop_stream():
             process.kill()
     process = None
     started_at = None
+    last_progress_at = None
+    last_output_time_ms = 0
 
 
 def run():
@@ -286,15 +360,27 @@ def run():
                 if active_signature != signature:
                     stop_stream()
                     needs_start = True
+                elif stream_is_stalled():
+                    print(
+                        "FFmpeg progress stalled; reconnecting RTMP session",
+                        flush=True,
+                    )
+                    write_status(
+                        "reconnecting",
+                        "FFmpeg не передає нові кадри; RTMP-сесію буде оновлено",
+                        video=video.get("name", video["source"]),
+                        pid=process.pid,
+                    )
+                    stop_stream()
+                    needs_start = True
                 if needs_start:
                     if playlist:
                         Path(playlist).unlink(missing_ok=True)
                     playlist = build_playlist()
-                    process = subprocess.Popen(
+                    start_stream(
                         command(video, playlist, text_overlays, media_overlays)
                     )
                     active_signature = signature
-                    started_at = int(time.time())
                 write_status(
                     "running" if process.poll() is None else "error",
                     video=video.get("name", video["source"]),
