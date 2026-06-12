@@ -1,3 +1,5 @@
+<img width="1488" height="1241" alt="image" src="https://github.com/user-attachments/assets/d4fe5ad7-1818-48bf-b7c2-85fd04759938" />
+
 # LoFi Studio: повне розгортання на Ubuntu
 
 Це покрокова інструкція для встановлення LoFi Studio на чистий хмарний
