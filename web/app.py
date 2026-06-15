@@ -18,6 +18,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from db import connect, init_db, setting, update_settings
+from runtime import live_stream_info
 
 BASE = Path(os.getenv("LOFI_BASE", "/home/lofi/app"))
 load_dotenv(BASE / ".env")
@@ -223,11 +224,15 @@ def state():
 
 
 def worker_status():
-    try:
-        import json
-        return json.loads(STATUS_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {"state": "offline", "message": "Worker не відповідає"}
+    status = live_stream_info()
+    if status.get("track"):
+        with connect() as db:
+            row = db.execute(
+                "SELECT enabled FROM tracks WHERE filename = ?",
+                (status["track"],),
+            ).fetchone()
+        status["track_enabled"] = bool(row["enabled"]) if row else None
+    return status
 
 
 def server_status():
@@ -428,6 +433,41 @@ def update_tracks():
             )
         db.commit()
     update_settings({"config_nonce": secrets.token_hex(8)})
+    return jsonify(ok=True)
+
+
+@app.post("/api/tracks/current/disable")
+@login_required
+def disable_current_track():
+    filename = live_stream_info().get("track", "")
+    if not filename:
+        return jsonify(error="Не вдалося визначити поточний трек"), 409
+    with connect() as db:
+        cursor = db.execute(
+            "UPDATE tracks SET enabled = 0 WHERE filename = ? AND enabled = 1",
+            (filename,),
+        )
+        db.commit()
+    if not cursor.rowcount:
+        return jsonify(error="Цей трек уже вимкнений або не знайдений"), 409
+    return jsonify(
+        ok=True,
+        filename=filename,
+        message="Трек вимкнено. Поточний ефір не перезапускався.",
+    )
+
+
+@app.post("/api/tracks/<int:track_id>/enable")
+@login_required
+def enable_track(track_id):
+    with connect() as db:
+        cursor = db.execute(
+            "UPDATE tracks SET enabled = 1 WHERE id = ?",
+            (track_id,),
+        )
+        db.commit()
+    if not cursor.rowcount:
+        return jsonify(error="Трек не знайдено"), 404
     return jsonify(ok=True)
 
 

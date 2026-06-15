@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>LoFi Studio</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260611-2') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v='20260615-2') }}">
 </head>
 <body>
 <header>
@@ -38,11 +38,24 @@
       </div>
       <p id="stream-message" class="muted">Перевіряємо зв'язок із worker...</p>
     </div>
-    <div class="actions">
-      <button onclick="streamAction('start')"><span class="button-icon">▶</span> Запустити</button>
-      <button class="secondary" onclick="streamAction('restart')">Перезапустити</button>
-      <button class="danger" onclick="streamAction('stop')">Зупинити</button>
+    <div id="stream-actions" class="actions">
+      <button id="stream-start" onclick="streamAction('start')"><span class="button-icon">▶</span> Запустити</button>
+      <button id="stream-restart" class="secondary" onclick="streamAction('restart')">Перезапустити</button>
+      <button id="stream-stop" class="danger" onclick="streamAction('stop')">Зупинити</button>
     </div>
+  </section>
+
+  <section class="now-playing">
+    <article class="card now-card">
+      <span class="now-icon">♫</span>
+      <div><label>Зараз грає</label><strong id="current-track">–</strong></div>
+      <button id="disable-current-track" class="quiet compact-action"
+        onclick="disableCurrentTrack()">Вимкнути</button>
+    </article>
+    <article class="card now-card">
+      <span class="now-icon">▶</span>
+      <div><label>Відеофон</label><strong id="current-video">–</strong></div>
+    </article>
   </section>
 
   <section class="metrics">
@@ -51,6 +64,7 @@
     <article class="card"><div class="metric-icon disk">D</div><div><label>Диск</label><strong id="disk">–</strong></div></article>
     <article class="card"><div class="metric-icon uptime">U</div><div><label>Аптайм</label><strong id="uptime">–</strong></div></article>
   </section>
+  <p id="ffmpeg-stats" class="stream-stats">FFmpeg: очікуємо дані...</p>
 
   <div id="media" class="section-heading">
     <div><p class="eyebrow">Джерела контенту</p><h2>Трансляція та медіа</h2></div>
@@ -104,6 +118,10 @@
         </div>
       </div>
       <div id="tracks" class="list empty" data-refresh-key="tracks">Треків ще немає</div>
+      <div id="disabled-tracks-wrap" class="disabled-tracks" hidden>
+        <label>Вимкнені треки</label>
+        <div id="disabled-tracks" class="list"></div>
+      </div>
     </section>
     <section class="card">
       <div class="card-heading"><span class="section-icon">◷</span><div><h3>Розклад відео</h3><p>Денні та нічні сцени за часом</p></div></div>
@@ -239,6 +257,11 @@ function duration(seconds) {
   const days = Math.floor(hours / 24);
   return days ? `${days} д ${hours % 24} год` : `${hours} год`;
 }
+function durationDetailed(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  return hours ? `${hours} год ${minutes} хв` : `${minutes} хв`;
+}
 async function refresh(full=true) {
   if (refreshInFlight) {
     refreshQueued = true;
@@ -252,11 +275,25 @@ async function refresh(full=true) {
     const stream = state.stream;
     document.getElementById("stream-state").textContent = {
       running:"Стрім працює", stopped:"Стрім зупинено",
-      error:"Потрібна увага", offline:"Worker офлайн"
+      reconnecting:"Перепідключення...", error:"Потрібна увага",
+      offline:"Worker офлайн"
     }[stream.state] || stream.state;
     document.getElementById("stream-message").textContent =
       stream.message || (stream.video ? `Відео: ${stream.video}` : "");
     document.getElementById("stream-dot").className = `dot ${stream.state}`;
+    const running = ["running", "reconnecting"].includes(stream.state);
+    document.getElementById("stream-start").hidden = running;
+    document.getElementById("stream-restart").hidden = !running;
+    document.getElementById("stream-stop").hidden = !running;
+    document.getElementById("current-track").textContent =
+      stream.track || "Немає даних";
+    document.getElementById("disable-current-track").hidden =
+      !running || !stream.track || stream.track_enabled === false;
+    document.getElementById("current-video").textContent =
+      stream.video_file || stream.video || "Немає даних";
+    document.getElementById("ffmpeg-stats").textContent = running ?
+      `FFmpeg · CPU ${stream.ffmpeg_cpu ?? "–"}% · RAM ${stream.ffmpeg_memory ?? "–"}% · ефір ${durationDetailed(stream.ffmpeg_uptime || 0)}` :
+      "FFmpeg не запущено";
     ["cpu","memory","disk"].forEach(k =>
       document.getElementById(k).textContent = `${state.server[k]}%`);
     document.getElementById("uptime").textContent = duration(state.server.uptime);
@@ -292,9 +329,17 @@ async function refresh(full=true) {
 }
 function renderTracks() {
   const root = document.getElementById("tracks");
-  root.innerHTML = state.tracks.map(track => `
+  const active = state.tracks.filter(track => track.enabled);
+  const disabled = state.tracks.filter(track => !track.enabled);
+  root.innerHTML = active.map(track => `
     <label class="row"><input type="checkbox" data-track="${track.id}" ${track.enabled ? "checked":""}>
-    <span>${escapeHtml(track.filename)}</span></label>`).join("") || "Треків ще немає";
+    <span>${escapeHtml(track.filename)}</span></label>`).join("") || "Активних треків немає";
+  const disabledWrap = document.getElementById("disabled-tracks-wrap");
+  disabledWrap.hidden = disabled.length === 0;
+  document.getElementById("disabled-tracks").innerHTML = disabled.map(track => `
+    <div class="row"><span>${escapeHtml(track.filename)}</span>
+    <button class="quiet compact-action" onclick="enableTrack(${track.id})">Повернути</button></div>
+  `).join("");
 }
 function renderVideos() {
   document.getElementById("schedule-video").innerHTML = state.videos.map(video =>
@@ -380,6 +425,16 @@ async function saveTracks() {
   dirtyRefreshKeys.delete("tracks");
   toast("Плейлист оновлено");
   await refresh();
+}
+async function disableCurrentTrack() {
+  const result = await api("/api/tracks/current/disable", {method:"POST"});
+  toast(`${result.filename} вимкнено без перезапуску ефіру`);
+  await refresh(true);
+}
+async function enableTrack(id) {
+  await api(`/api/tracks/${id}/enable`, {method:"POST"});
+  toast("Трек повернено до бібліотеки");
+  await refresh(true);
 }
 async function scanMedia() {
   const result = await api("/api/media/scan", {method:"POST"});

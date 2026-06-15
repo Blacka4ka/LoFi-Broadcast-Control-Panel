@@ -13,9 +13,8 @@ BASE = Path(os.getenv("LOFI_BASE", "/home/lofi/app"))
 load_dotenv(BASE / ".env")
 sys.path.insert(0, str(BASE / "web"))
 
-from db import init_db, setting, update_settings
-
-STATUS_FILE = BASE / "data" / "worker-status.json"
+from db import connect, init_db, setting, update_settings
+from runtime import live_stream_info
 
 
 def telegram_call(token, method, payload=None, timeout=35):
@@ -28,13 +27,18 @@ def telegram_call(token, method, payload=None, timeout=35):
 
 
 def send_message(token, chat_id, text):
+    status = live_stream_info()
+    running = status.get("state") in {"running", "reconnecting"}
+    can_disable = running and current_track_enabled(status.get("track", ""))
     keyboard = {
         "keyboard": [
-            ["Статус", "Перезапустити"],
-            ["Запустити", "Зупинити"],
+            ["Статус", "Перезапустити"] if running else ["Статус", "Запустити"],
+            ["Вимкнути цей трек"] if can_disable else [],
+            ["Зупинити"] if running else [],
         ],
         "resize_keyboard": True,
     }
+    keyboard["keyboard"] = [row for row in keyboard["keyboard"] if row]
     telegram_call(token, "sendMessage", {
         "chat_id": chat_id,
         "text": text,
@@ -43,10 +47,7 @@ def send_message(token, chat_id, text):
 
 
 def status_text():
-    try:
-        status = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return "Worker не відповідає"
+    status = live_stream_info()
     labels = {
         "running": "Стрім працює",
         "stopped": "Стрім зупинено",
@@ -56,9 +57,59 @@ def status_text():
     text = labels.get(status.get("state"), status.get("state", "Невідомий стан"))
     if status.get("video"):
         text += f"\nВідео: {status['video']}"
+    if status.get("video_file") and status["video_file"] != status.get("video"):
+        text += f"\nФайл: {status['video_file']}"
+    if status.get("track"):
+        text += f"\nЗараз грає: {status['track']}"
+    if status.get("ffmpeg_uptime"):
+        text += f"\nЕфір: {format_duration(status['ffmpeg_uptime'])}"
+    if status.get("ffmpeg_cpu") is not None:
+        text += (
+            f"\nFFmpeg: CPU {status['ffmpeg_cpu']}% · "
+            f"RAM {status.get('ffmpeg_memory', 0)}%"
+        )
     if status.get("message"):
         text += f"\n{status['message']}"
     return text
+
+
+def format_duration(seconds):
+    hours, remainder = divmod(int(seconds), 3600)
+    minutes = remainder // 60
+    if hours >= 24:
+        days, hours = divmod(hours, 24)
+        return f"{days} д {hours} год {minutes} хв"
+    return f"{hours} год {minutes} хв" if hours else f"{minutes} хв"
+
+
+def disable_current_track():
+    filename = live_stream_info().get("track", "")
+    if not filename:
+        return "Не вдалося визначити поточний трек"
+    with connect() as db:
+        cursor = db.execute(
+            "UPDATE tracks SET enabled = 0 WHERE filename = ? AND enabled = 1",
+            (filename,),
+        )
+        db.commit()
+    if not cursor.rowcount:
+        return "Цей трек уже вимкнений або не знайдений"
+    return (
+        f"Вимкнено: {filename}\n"
+        "Ефір не перезапускався. Зміна діятиме після наступного "
+        "планового перепідключення."
+    )
+
+
+def current_track_enabled(filename):
+    if not filename:
+        return False
+    with connect() as db:
+        row = db.execute(
+            "SELECT enabled FROM tracks WHERE filename = ?",
+            (filename,),
+        ).fetchone()
+    return bool(row["enabled"]) if row else False
 
 
 def handle_message(token, message, allowed_user):
@@ -87,6 +138,8 @@ def handle_message(token, message, allowed_user):
             "restart_nonce": secrets.token_hex(8),
         })
         send_message(token, chat_id, "Команду перезапуску прийнято")
+    elif text == "Вимкнути цей трек":
+        send_message(token, chat_id, disable_current_track())
 
 
 def run():
